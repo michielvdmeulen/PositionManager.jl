@@ -1,0 +1,10 @@
+name = "PositionManager"
+uuid = "33775bea-d6e1-463d-9194-39fde8d3367c"
+authors = ["Michiel van der Meulen <michielvdmeulen@gmail.com> and contributors"]
+version = "0.0.1"
+
+[compat]
+julia = "1.12"
+
+[workspace]
+projects = ["test", "docs"]
