@@ -1,5 +1,7 @@
 # PositionManager Implemented Surface
 
+Last changed: 2026-04-09T12:43:39+02:00
+
 This file is for Codex sessions working in `PositionManager.jl`.
 It should summarize what the package currently implements at a high level.
 
