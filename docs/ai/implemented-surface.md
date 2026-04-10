@@ -1,6 +1,6 @@
 # PositionManager Implemented Surface
 
-Last changed: 2026-04-10T16:00:00+02:00
+Last changed: 2026-04-10T18:05:00+02:00
 
 ## Package role
 
@@ -29,8 +29,9 @@ Store APIs:
 Core logic:
 
 - `detect_strategy(legs)`
-- `compute_pnl(position, chain, multiplier=100.0)`
+- `compute_pnl(position, chain, multiplier=inferred_from_chain_or_default)`
 - `breakevens(position, multiplier=100.0)`
+- `breakevens(position, chain)` (uses inferred chain multiplier)
 - `apply_position_event!(store, event)`
 - `apply_partial_close!(store, position_id, closing_legs, multiplier=100.0)`
 - `group_ungrouped!(store, conids, campaign="default")`
@@ -40,3 +41,5 @@ Core logic:
 - Persistence is in-memory only (`PositionStore`).
 - No PostgreSQL backend yet.
 - No campaign-budget model integration yet.
+- Payoff bounds and breakevens are now derived from generic piecewise payoff math across
+  option legs, rather than strategy-label-specific shortcuts.

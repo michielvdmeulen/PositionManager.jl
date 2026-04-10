@@ -98,3 +98,18 @@ end
     @test length(grouped.legs) == 2
     @test isempty(store.ungrouped)
 end
+
+@testset "group_ungrouped! throws when no conids match" begin
+    store = PositionStore()
+    store.ungrouped = [PositionLegRecord(
+        7001,
+        "7001",
+        :call,
+        100.0,
+        Date(2026, 6, 19),
+        1,
+        1.0,
+        DateTime(2026, 4, 10, 12, 0, 0)
+    )]
+    @test_throws ArgumentError group_ungrouped!(store, [9999], "manual")
+end

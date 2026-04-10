@@ -16,7 +16,8 @@ function _to_leg_record(leg::MarketState.PositionLeg, timestamp::DateTime)::Posi
 end
 
 function _append_leg(position::Position, leg::PositionLegRecord)::Position
-    legs = [position.legs; leg]
+    legs = copy(position.legs)
+    push!(legs, leg)
     strategy_label = detect_strategy(legs)
     return Position(
         position.id,
@@ -106,7 +107,8 @@ function apply_partial_close!(
         store::PositionStore,
         position_id::UUID,
         closing_legs::Vector{MarketState.PositionLeg},
-        multiplier::Float64 = 100.0
+        multiplier::Float64 = DEFAULT_OPTION_MULTIPLIER;
+        now_dt::DateTime = Dates.now()
 )::Nothing
     haskey(store.positions, position_id) || throw(KeyError(position_id))
     current = store.positions[position_id]
@@ -136,7 +138,7 @@ function apply_partial_close!(
     updated_legs = collect(values(by_conid))
     open_legs = filter(leg -> !iszero(leg.quantity), updated_legs)
     status = isempty(open_legs) ? Closed : PartialClose
-    closed_at = status == Closed ? Dates.now() : current.closed_at
+    closed_at = status == Closed ? now_dt : current.closed_at
     label = detect_strategy(open_legs)
     updated = Position(
         current.id,
@@ -156,7 +158,8 @@ end
 function group_ungrouped!(
         store::PositionStore,
         conids::Vector{Int},
-        campaign::String = "default"
+        campaign::String = "default";
+        now_dt::DateTime = Dates.now()
 )::Position
     chosen = PositionLegRecord[]
     remaining = PositionLegRecord[]
@@ -168,8 +171,9 @@ function group_ungrouped!(
             push!(remaining, leg)
         end
     end
+    isempty(chosen) && throw(ArgumentError("no matching ungrouped legs for requested conids"))
     store.ungrouped = remaining
-    created = _new_position(chosen, campaign, Dates.now())
+    created = _new_position(chosen, campaign, now_dt)
     save!(store, created)
     return created
 end

@@ -3,7 +3,7 @@ using OptionChains
 using PositionManager
 using Test
 
-function _chain_with_quotes(entries::Vector{Tuple{Int, Float64, Float64}})
+function _chain_with_quotes(entries::Vector{Tuple{Int, Float64, Float64}}; multiplier::Float64 = 100.0)
     nodes = OptionNode[]
     for (conid, _, _) in entries
         push!(
@@ -14,7 +14,7 @@ function _chain_with_quotes(entries::Vector{Tuple{Int, Float64, Float64}})
                 right = Call,
                 strike = 100.0 + conid,
                 underlying = "ES",
-                multiplier = 100.0
+                multiplier = multiplier
             )
         )
     end
@@ -46,6 +46,44 @@ end
     @test pnl.max_profit !== nothing
     @test pnl.max_loss !== nothing
     @test length(breakevens(pos, 100.0)) == 1
+end
+
+@testset "compute_pnl infers multiplier from chain node metadata" begin
+    expiry = Date(2026, 6, 19)
+    legs = [PositionLegRecord(
+        7,
+        "7",
+        :call,
+        100.0,
+        expiry,
+        1,
+        2.0,
+        DateTime(2026, 4, 10, 10, 0, 0)
+    )]
+    pos = Position(; legs = legs, campaign = "default")
+    chain = _chain_with_quotes([(7, 3.0, 3.0)]; multiplier = 50.0)
+    pnl = compute_pnl(pos, chain)
+    @test pnl.unrealized ≈ (3.0 - 2.0) * 50.0
+end
+
+@testset "single long put has finite max profit and one breakeven" begin
+    expiry = Date(2026, 6, 19)
+    legs = [PositionLegRecord(
+        9,
+        "9",
+        :put,
+        100.0,
+        expiry,
+        1,
+        4.0,
+        DateTime(2026, 4, 10, 10, 0, 0)
+    )]
+    pos = Position(; legs = legs, campaign = "default")
+    chain = _chain_with_quotes([(9, 3.0, 3.0)])
+    pnl = compute_pnl(pos, chain, 100.0)
+    @test pnl.max_profit ≈ (100.0 - 4.0) * 100.0
+    @test pnl.max_loss ≈ 4.0 * 100.0
+    @test breakevens(pos, 100.0) == [96.0]
 end
 
 @testset "missing chain leg does not throw" begin

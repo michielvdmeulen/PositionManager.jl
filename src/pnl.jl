@@ -2,6 +2,8 @@ function _open_legs(position::Position)
     return filter(leg -> !iszero(leg.quantity), position.legs)
 end
 
+const DEFAULT_OPTION_MULTIPLIER = 100.0
+
 function _chain_mid(chain::OptionChains.ChainState, conid::Int)::Float64
     idx = get(chain.universe.by_ticker, string(conid), nothing)
     idx === nothing && return 0.0
@@ -10,60 +12,67 @@ function _chain_mid(chain::OptionChains.ChainState, conid::Int)::Float64
     return (quote_state.bid + quote_state.ask) / 2.0
 end
 
-function _vertical_bounds(legs::Vector{PositionLegRecord}, multiplier::Float64)
-    length(legs) == 2 || return (nothing, nothing)
-    q = abs(legs[1].quantity)
-    q > 0 || return (nothing, nothing)
-    strike_diff = abs(legs[1].strike - legs[2].strike)
-    net_debit_per_unit = sum(leg.avg_fill_price * sign(leg.quantity) for leg in legs)
-    if net_debit_per_unit >= 0
-        max_loss = net_debit_per_unit * multiplier * q
-        max_profit = max((strike_diff - net_debit_per_unit) * multiplier * q, 0.0)
-    else
-        credit = -net_debit_per_unit
-        max_profit = credit * multiplier * q
-        max_loss = max((strike_diff - credit) * multiplier * q, 0.0)
+function _inferred_multiplier(
+        position::Position,
+        chain::OptionChains.ChainState
+)::Float64
+    for leg in position.legs
+        idx = get(chain.universe.by_ticker, string(leg.conid), nothing)
+        idx === nothing && continue
+        return chain.universe.nodes[idx].multiplier
     end
-    return (max_profit, max_loss)
+    return DEFAULT_OPTION_MULTIPLIER
 end
 
-function _butterfly_bounds(legs::Vector{PositionLegRecord}, multiplier::Float64)
-    ordered = sort(collect(legs); by = leg -> leg.strike)
-    wing_width = ordered[2].strike - ordered[1].strike
-    n = abs(ordered[1].quantity)
-    net_debit = sum(leg.avg_fill_price * leg.quantity for leg in ordered) * multiplier
-    max_profit = wing_width * multiplier * n - net_debit
-    return (max_profit, net_debit)
+_is_call(right::Symbol) = right == :call || right == :CALL
+_is_put(right::Symbol) = right == :put || right == :PUT
+
+function _supports_payoff_math(legs::Vector{PositionLegRecord})::Bool
+    return all(leg ->
+        leg.right !== nothing && leg.strike !== nothing &&
+        (_is_call(leg.right) || _is_put(leg.right)),
+        legs
+    )
 end
 
-function _single_leg_bounds(leg::PositionLegRecord, multiplier::Float64)
-    premium = abs(leg.quantity) * leg.avg_fill_price * multiplier
-    if leg.quantity > 0
-        return leg.right == :call ? (nothing, premium) : (nothing, premium)
+function _intrinsic(leg::PositionLegRecord, underlying_price::Float64)::Float64
+    strike = leg.strike::Float64
+    right = leg.right::Symbol
+    if _is_call(right)
+        return max(underlying_price - strike, 0.0)
     end
-    return (premium, nothing)
+    return max(strike - underlying_price, 0.0)
 end
 
-function _max_bounds(
-        strategy_label::Union{Nothing, String},
+function _position_value_at_expiry(
         legs::Vector{PositionLegRecord},
+        underlying_price::Float64,
         multiplier::Float64
-)
-    strategy_label === nothing && return (nothing, nothing)
-    if startswith(strategy_label, "put_butterfly_") || startswith(strategy_label, "call_butterfly_")
-        return _butterfly_bounds(legs, multiplier)
-    elseif strategy_label in ("call_vertical", "put_vertical")
-        return _vertical_bounds(legs, multiplier)
-    elseif strategy_label in ("long_call", "short_call", "long_put", "short_put")
-        return _single_leg_bounds(legs[1], multiplier)
+)::Float64
+    value = 0.0
+    for leg in legs
+        value += (leg.quantity * (_intrinsic(leg, underlying_price) - leg.avg_fill_price)) *
+                 multiplier
     end
-    return (nothing, nothing)
+    return value
+end
+
+function _max_bounds(legs::Vector{PositionLegRecord}, multiplier::Float64)
+    isempty(legs) && return (nothing, nothing)
+    _supports_payoff_math(legs) || return (nothing, nothing)
+    strikes = sort(unique(leg.strike::Float64 for leg in legs))
+    candidates = unique(vcat(0.0, strikes))
+    payouts = map(spot -> _position_value_at_expiry(legs, spot, multiplier), candidates)
+    net_call_qty = sum(_is_call(leg.right::Symbol) ? leg.quantity : 0 for leg in legs)
+    max_profit = net_call_qty > 0 ? nothing : maximum(payouts)
+    max_loss = net_call_qty < 0 ? nothing : -minimum(payouts)
+    return (max_profit, max_loss)
 end
 
 function compute_pnl(
         position::Position,
         chain::OptionChains.ChainState,
-        multiplier::Float64 = 100.0
+        multiplier::Float64 = _inferred_multiplier(position, chain)
 )::PositionPnL
     unrealized = 0.0
     open_legs = _open_legs(position)
@@ -73,8 +82,7 @@ function compute_pnl(
     end
     realized = position.realized_pnl
     total = unrealized + realized
-    strategy_label = detect_strategy(open_legs)
-    max_profit, max_loss = _max_bounds(strategy_label, open_legs, multiplier)
+    max_profit, max_loss = _max_bounds(open_legs, multiplier)
     pct_of_max_profit = (max_profit === nothing || iszero(max_profit)) ? nothing :
                         unrealized / max_profit
     pct_of_max_loss = (max_loss === nothing || iszero(max_loss)) ? nothing : unrealized / max_loss
@@ -89,32 +97,69 @@ function compute_pnl(
     )
 end
 
-function breakevens(position::Position, multiplier::Float64 = 100.0)::Vector{Float64}
-    legs = _open_legs(position)
-    label = detect_strategy(legs)
-    label === nothing && return Float64[]
-    if startswith(label, "put_butterfly_") || startswith(label, "call_butterfly_")
-        ordered = sort(collect(legs); by = leg -> leg.strike)
-        n = abs(ordered[1].quantity)
-        debit_per_unit = (sum(leg.avg_fill_price * leg.quantity for leg in ordered) * multiplier) /
-                         (multiplier * n)
-        return [ordered[1].strike + debit_per_unit, ordered[3].strike - debit_per_unit]
-    elseif label == "call_vertical"
-        ordered = sort(collect(legs); by = leg -> leg.strike)
-        q = abs(ordered[1].quantity)
-        debit_per_unit = sum(leg.avg_fill_price * sign(leg.quantity) for leg in ordered) / q
-        return [ordered[1].strike + debit_per_unit]
-    elseif label == "put_vertical"
-        ordered = sort(collect(legs); by = leg -> leg.strike)
-        q = abs(ordered[1].quantity)
-        debit_per_unit = sum(leg.avg_fill_price * sign(leg.quantity) for leg in ordered) / q
-        return [ordered[end].strike - debit_per_unit]
-    elseif label == "long_call"
-        leg = only(legs)
-        return [leg.strike + leg.avg_fill_price]
-    elseif label == "long_put"
-        leg = only(legs)
-        return [leg.strike - leg.avg_fill_price]
+function _interval_slope(
+        legs::Vector{PositionLegRecord},
+        left::Float64,
+        right::Float64,
+        multiplier::Float64
+)::Float64
+    probe = (left + right) / 2.0
+    slope = 0.0
+    for leg in legs
+        strike = leg.strike::Float64
+        right_symbol = leg.right::Symbol
+        if _is_call(right_symbol)
+            slope += (probe > strike ? leg.quantity : 0) * multiplier
+        elseif _is_put(right_symbol)
+            slope += (probe < strike ? -leg.quantity : 0) * multiplier
+        end
     end
-    return Float64[]
+    return slope
+end
+
+function _push_unique!(roots::Vector{Float64}, x::Float64; atol::Float64 = 1e-8)
+    x < 0.0 && return roots
+    for existing in roots
+        isapprox(existing, x; atol = atol) && return roots
+    end
+    push!(roots, x)
+    return roots
+end
+
+function breakevens(position::Position, multiplier::Float64 = DEFAULT_OPTION_MULTIPLIER)::Vector{
+    Float64}
+    legs = _open_legs(position)
+    _supports_payoff_math(legs) || return Float64[]
+    strikes = sort(unique(leg.strike::Float64 for leg in legs))
+    knots = unique(vcat(0.0, strikes))
+    roots = Float64[]
+
+    for idx in 1:(length(knots) - 1)
+        left = knots[idx]
+        right = knots[idx + 1]
+        left_value = _position_value_at_expiry(legs, left, multiplier)
+        right_value = _position_value_at_expiry(legs, right, multiplier)
+        iszero(left_value) && _push_unique!(roots, left)
+        iszero(right_value) && _push_unique!(roots, right)
+        sign(left_value) == sign(right_value) && continue
+        root = left + (0.0 - left_value) * (right - left) / (right_value - left_value)
+        _push_unique!(roots, root)
+    end
+
+    if !isempty(knots)
+        left = knots[end]
+        left_value = _position_value_at_expiry(legs, left, multiplier)
+        slope = _interval_slope(legs, left, left + 1.0, multiplier)
+        if !iszero(slope)
+            ray_root = left - left_value / slope
+            ray_root > left && _push_unique!(roots, ray_root)
+        elseif iszero(left_value)
+            _push_unique!(roots, left)
+        end
+    end
+    return sort(roots)
+end
+
+function breakevens(position::Position, chain::OptionChains.ChainState)::Vector{Float64}
+    return breakevens(position, _inferred_multiplier(position, chain))
 end
