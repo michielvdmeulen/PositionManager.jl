@@ -1,3 +1,13 @@
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+MarketState = "ba095f02-1eb5-4340-9caa-0beba8a5ce26"
+OptionChains = "38e046c1-e4ab-49fa-8553-5070b956485a"
+PositionManager = "33775bea-d6e1-463d-9194-39fde8d3367c"
 SafeTestsets = "1bc83da4-3b8d-516f-aca4-4fe02f6d838f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[sources]
+MarketState = {path = "../../MarketState"}
+OptionChains = {path = "../../OptionChains"}
+PositionManager = {path = ".."}

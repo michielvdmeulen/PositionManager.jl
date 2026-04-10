@@ -1,15 +1,42 @@
 # PositionManager Implemented Surface
 
-Last changed: 2026-04-09T12:43:39+02:00
+Last changed: 2026-04-10T16:00:00+02:00
 
-This file is for Codex sessions working in `PositionManager.jl`.
-It should summarize what the package currently implements at a high level.
+## Package role
 
-Keep this file current as the package evolves.
+`PositionManager.jl` provides an in-memory position model for grouped option/futures legs,
+strategy-shape detection, position P&L calculations, and reconciliation handlers driven by
+`MarketState.PositionEvent`.
 
-Suggested content:
+## Public surface
 
-- package role in the wider system
-- public surface that exists today
-- notable constraints or non-goals
-- current gaps or unfinished areas that still matter for planning
+Types:
+
+- `PositionLegRecord`
+- `PositionStatus` (`Open`, `PartialClose`, `Closed`)
+- `Position`
+- `PositionPnL`
+- `AbstractPositionStore`
+- `PositionStore`
+
+Store APIs:
+
+- `save!(store, position)`
+- `load_open(store)`
+- `load_ungrouped(store)`
+- `save_ungrouped!(store, legs)`
+
+Core logic:
+
+- `detect_strategy(legs)`
+- `compute_pnl(position, chain, multiplier=100.0)`
+- `breakevens(position, multiplier=100.0)`
+- `apply_position_event!(store, event)`
+- `apply_partial_close!(store, position_id, closing_legs, multiplier=100.0)`
+- `group_ungrouped!(store, conids, campaign="default")`
+
+## Current constraints
+
+- Persistence is in-memory only (`PositionStore`).
+- No PostgreSQL backend yet.
+- No campaign-budget model integration yet.
